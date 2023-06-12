@@ -1,0 +1,1332 @@
+---
+title: "STA.141.Final.Draft"
+author: "Ben Wiesner"
+date: "2023-06-10"
+output: html_document
+---
+
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(fig.pos = 'H')
+library(htmlwidgets)
+library(tidyverse)
+library(data.table)
+library(dplyr)
+library(reshape)
+library(gridExtra)
+library(ggplot2)
+library(RColorBrewer)
+library(grid)
+library("knitr")
+
+```
+
+```{r, echo = FALSE}
+test1 <- readRDS("/Users/benwiesner/Documents/STA_131A/test1.rds")
+test2 <- readRDS("/Users/benwiesner/Documents/STA_131A/test2.rds")
+```
+
+
+```{r,  echo = FALSE, warning=FALSE}
+# read data
+session=list()
+for(i in 1:18){
+  session[[i]]=readRDS(paste('/Users/benwiesner/Documents/STA 141A/sessions/session',i,'.rds',sep=''))
+}
+```
+
+
+
+# Abstract
+
+In this project, I created a predictive model of mouse decisions. Based on visual stimuli, the model predicts whether a mouse will twist a ball to the left, right, or not. The correct decision is to twist the ball in the direction of an image with more definition. Through graphical analysis, I found variables that are significant indicators of the mouse's success or failure. I used these variables as coefficients of a basic predictive model. I then observed the behavioral trends of the mice and adapted the basic model to be more accurate using this information. Specifically, I added a coefficient for decision type and built two different models trained with data over-sampled from the mice in sessions 1 and 18. 
+
+# Introduction
+
+## Real World Motivation
+
+The real world motivation behind this project is to explore how data science can be used to predict decision making using neurological and behavior data to be better prepared to appled similar methods to more complex cases
+
+## i - Data Summary
+
+The data set used to create my model consists of 18 sessions. Each session contains a different number of trials where a mouse was prompted to twist a ball left or right depending on the stimuli on the screen. The screen has two images, and the mouse makes the correct decision if they twist the ball in the direction of the image with more definition. The mice in trials were trained via rewards for the correct response to make decisions and punishments for incorrect decisions. The contrast type, neurological activity, time, mouse name, and accuracy are recorded for each trial.
+
+## ii - Goal
+
+The goal of this project is to create a model to predict the mouse response in testing data pulled from sessions 1 and 18.
+
+
+## iii - Approach
+
+The Approach I took to creating my model was to find significant indicators of the mouse's decision through graphical analysis. I found that the average neuron activation rate was a significant indicator and used it as a coefficient in my model. I then found behavioral trends in the data and used this information to improve my model. I did this in two ways. One, I found the mice in sessions 1 and 18 decisions making processes to be significantly different, so I designed models specifically for testing the data from sessions 1 and 18. Two, I found that the mice's success rate varied significantly based on differences in contrast, so I accounted for that in my models.
+
+# Part 1
+
+## i - Data Table 
+
+The table below gives a basic outline of the data set. It shows there are 18 sessions in the data set. Each containing the name of the mouse being tested(mouse_name), date of the experiment(date_exp), number of brain areas that neurological data was collected from(n_brain_area), number of neurons data was collected from(n_neurons), number of trials, (n_trials), and Success rate(Success_rate). It is important to note that there are 4 different mice being tested with number of session ranging from 3 to 7. Additionally the success rate, number of neurons, number of brain area's and number of trials all vary greatly between sessions and mice. All of these differences must be accounted for in my model.
+
+```{r,  echo = FALSE, warning=FALSE}
+## i) Data Table
+n.session=length(session)
+
+# in library tidyverse
+meta <- tibble(
+  mouse_name = rep('name',n.session),
+  date_exp =rep('dt',n.session),
+  n_brain_area = rep(0,n.session),
+  n_neurons = rep(0,n.session),
+  n_trials = rep(0,n.session),
+  success_rate = rep(0,n.session)
+)
+
+
+for(i in 1:n.session){
+  tmp = session[[i]];
+  meta[i,1]=tmp$mouse_name;
+  meta[i,2]=tmp$date_exp;
+  meta[i,3]=length(unique(tmp$brain_area));
+  meta[i,4]=dim(tmp$spks[[1]])[1];
+  meta[i,5]=length(tmp$feedback_type);
+  meta[i,6]=mean(tmp$feedback_type+1)/2;
+}
+
+kable(meta, format = "html", table.attr = "class='table table-striped'",digits=2) 
+
+```
+
+
+## ii - Neurological Activity per Brain Area
+
+Below are three sets of plots, each showing the brain activity per brain area in three different sessions. Each set of plots contains the brain activity in all trials, trials in which the mouse made the correct decision, and trials in which the mouse made the incorrect decision. The three sessions I selected are emblematic trends in these plots across all sessions.
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE} 
+# Wrapping up the function:
+
+average_spike_area<-function(i.t,this_session){
+  spk.trial = this_session$spks[[i.t]]
+  area= this_session$brain_area
+  spk.count=apply(spk.trial,1,sum)
+  spk.average.tapply=tapply(spk.count, area, mean)
+  return(spk.average.tapply)
+  }
+
+# Test the function
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+brain.activity.ls <- list()
+k = 1
+for(i in 1:18){
+  i.t = 1
+  i.s = i
+  n.trial=length(session[[i.s]]$feedback_type)
+  n.area=length(unique(session[[i.s]]$brain_area ))
+  # Alternatively, you can extract these information in the meta that we created before.
+  
+  # We will create a data frame that contain the average spike counts for each area, feedback type,  the two contrasts, and the trial id
+  
+  trial.summary =matrix(nrow=n.trial,ncol= n.area+1+2+1)
+  for(i.t in 1:n.trial){
+    trial.summary[i.t,]=c(average_spike_area(i.t,this_session = session[[i.s]]),
+                          session[[i.s]]$feedback_type[i.t],
+                          session[[i.s]]$contrast_left[i.t],
+                          session[[i.s]]$contrast_right[i.s],
+                          i.t)
+  }
+
+  colnames(trial.summary)=c(names(average_spike_area(i.t,this_session = session[[i.s]])), 'feedback', 'left contr.','right contr.','id' )
+
+  # Turning it into a data frame and store in list brain
+  a = as_tibble(trial.summary)
+  brain.activity.ls[[k]] <- a
+  k = k + 1
+}
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# create list of correct response brain activity plots
+complete.brain.activity.plots.ls <- list()
+k = 1
+for (i in 1:18) {
+  trial.summary <- data.frame(brain.activity.ls[i])
+  n.area <- length(trial.summary) - 4
+  n.trial <- nrow(trial.summary)
+  area.col <- rainbow(n = n.area, alpha = 0.7)
+  colnames <- colnames(trial.summary)[1:n.area]
+  
+  # Create a data frame for plotting
+  df <- melt(trial.summary, id.vars = "id", measure.vars = colnames(trial.summary)[1:n.area])
+  
+  # Create the plot
+  plot <- ggplot(df, aes(x = id, y = value, color = variable)) +
+    geom_smooth(data = subset(df, variable != "var3"), size = 1) +
+    xlim(0, n.trial) +
+    ylim(0.5, 3) +
+    labs(x = "Trials", y = "Average spike counts", title = paste("Spikes per area in Session", i, colors = "area.col")) +
+    scale_color_manual(values = area.col, labels = colnames)
+
+  # Display the plot
+  complete.brain.activity.plots.ls[[k]] = plot
+  k = k + 1
+}
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# create list of correct response brain activity plots
+incorrect.brain.activity.plots.ls <- list()
+k = 1
+for (i in 1:18) {
+  trial.summary <- filter(data.frame(brain.activity.ls[i]), feedback == -1)
+  n.area <- length(trial.summary) - 4
+  n.trial <- nrow(trial.summary)
+  area.col <- rainbow(n = n.area, alpha = 0.7)
+  colnames <- colnames(trial.summary)[1:n.area]
+  
+  # Create a data frame for plotting
+  df <- melt(trial.summary, id.vars = "id", measure.vars = colnames(trial.summary)[1:n.area])
+  
+  # Create the plot
+  plot <- ggplot(df, aes(x = id, y = value, color = variable)) +
+    geom_smooth(data = subset(df, variable != "var3"), size = 1) +
+    xlim(0, n.trial) +
+    ylim(0.5, 3) +
+    labs(x = "Trials", y = "Average spike counts", title = paste("Spikes per area in Session", i, colors = "area.col")) +
+    scale_color_manual(values = area.col, labels = colnames)
+
+  # Display the plot
+  incorrect.brain.activity.plots.ls[[k]] = plot
+  k = k + 1
+}
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# create list of inccorrect responce brain activity plots
+correct.brain.activity.plots.ls <- list()
+k = 1
+for (i in 1:18) {
+  trial.summary <- filter(data.frame(brain.activity.ls[i]), feedback == 1)
+  n.area <- length(trial.summary) - 4
+  n.trial <- nrow(trial.summary)
+  area.col <- rainbow(n = n.area, alpha = 0.7)
+  colnames <- colnames(trial.summary)[1:n.area]
+  
+  # Create a data frame for plotting
+  df <- melt(trial.summary, id.vars = "id", measure.vars = colnames(trial.summary)[1:n.area])
+  
+  # Create the plot
+  plot <- ggplot(df, aes(x = id, y = value, color = variable)) +
+    geom_smooth(data = subset(df, variable != "var3"), size = 1) +
+    xlim(0, n.trial) +
+    ylim(0.5, 3) +
+    labs(x = "Trials", y = "Average spike counts", title = paste("Spikes per area in Session", i, colors = "area.col")) +
+    scale_color_manual(values = area.col, labels = colnames)
+
+  # Display the plot
+  correct.brain.activity.plots.ls[[k]] = plot
+  k = k + 1
+}
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# Create an empty list to store plot arrangements
+arranged_plots <- list()
+
+# Iterate over the plots and arrange them in sets of three
+for (i in c(8,18,17)) {
+  arranged_plots[[i]] <- grid.arrange(
+    complete.brain.activity.plots.ls[[i]] + 
+      labs(x = "Trials", y = "Average spike counts", title = paste("All Trials session", i)) +
+      theme(legend.position="none"),
+    correct.brain.activity.plots.ls[[i]] +  
+      labs(x = "Trials", y = NULL, title = paste("Correct Trials", i)) +
+      theme(legend.position="none"),
+    incorrect.brain.activity.plots.ls[[i]]+ 
+      labs(x = "Trials", y = NULL, title = paste("Incorrect Trials", i)),
+    ncol = 3
+  )
+}
+
+# Arrange the plot arrangements in a grid
+#final_grid <- do.call(grid.arrange, arranged_plots)
+# 8, 11, 17
+```
+
+
+
+It is essential to note that the neurological activity significantly differs between the successful and unsuccessful trials in these three sets of graphs. This implies that the mice's decision process differs between correct and incorrect decisions. Therefore, neurological activity per brain area is a good indicator of success or failure. Another important observation is that the brain areas observed in each trial are different, meaning the brain area cannot be used unilaterally as a coefficient in a model because different sessions have different brain areas.
+
+In conclusion, the plot of brain area neurological activity indicates a difference in neurological activity between response types. However,  brain area is not an excellent coefficient as brain areas differ between sessions. To address this issue, I analyzed brain activity without grouping it by brain areas. The method I found most significant was the Average neuron activation rate.
+
+
+## iii - Average Neuron Activation Rate
+
+Below are graphs of the average neuron activation rate per trial in 3 sessions, which are emblematic of the activation rate graphs for all 18 sessions. I calculated the Average neuron activation rate by finding the mean rate at which neurons were activated in each trial of each session. Higher neuron activation rates correlate with higher neurological activity. The plots below have three lines representing the neurological activity in all trials, trials with correct responses and trials with incorrect responses. 
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# calculate activation rate and store them in a lists to graph.
+correct.ave.activity.ls <- list()
+incorrect.ave.activity.ls <- list()
+ave.activity.ls <- list()
+for(i in 1:18){
+  spks <- session[[i]]$spks
+  ave.activity.v <- c()
+  feedback.type <- session[[i]]$feedback_type
+  for(j in 1:length(spks)){
+    matrix <- spks[[j]]
+    ave.activity <- sum(rowSums(matrix)/40)/nrow(matrix)
+    ave.activity.v <- append(ave.activity.v, ave.activity)
+    id <- 1:length(spks)
+  }
+  df <- data.frame(ave.activity.v, feedback.type,id)
+  ave.activity.ls[[i]] <- df
+  correct.ave.activity.ls[[i]] <- df %>% filter(feedback.type == 1)
+  incorrect.ave.activity.ls[[i]] <- df %>% filter(feedback.type == -1)
+  
+}
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# create a list of all plots from each session containing the activation rates in all trial, correct tials, and incorrect trials
+ave.activity.plots <- list()
+for(i in 1:18){
+  p1 <- ggplot() + 
+    geom_smooth(data = ave.activity.ls[[i]], aes(x = id, y = ave.activity.v, color = "All Trials")) + 
+    geom_smooth(data = correct.ave.activity.ls[[i]], aes(x = id, y = ave.activity.v, color = "Correct Trials")) +
+    geom_smooth(data = incorrect.ave.activity.ls[[i]], aes(x = id, y = ave.activity.v, color = "Incorrect Trials")) + 
+    scale_color_manual(values = c("All Trials" = "blue", "Correct Trials" = "black", "Incorrect Trials" = "red")) +
+    labs(color = "Data Subsets", y = "Rate per Neuron", x = "Trials", title = paste("Session", i, "Activation rate"))
+  ave.activity.plots[[i]] <- p1
+}
+
+```
+
+```{r, warning=FALSE, echo = FALSE, message=FALSE}
+grid.arrange(ave.activity.plots[[1]], ave.activity.plots[[13]], ave.activity.plots[[8]], ave.activity.plots[[16]])
+```
+
+The graphs above show, in all cases, that the average neuron activation rate is significantly higher in correct trials than incorrect trials. This indicates that a higher activation rate correlates with correct responses. In other words, when mice make the correct decision, they think more which is supported by the higher activation rates. As activation rates can be calculated the same way in all sessions and strongly correlate with success and failure, I will use the average activation rate as a coefficient in my logistic model to account for differences in neurological activity.
+
+## iv - Average Spikes Density
+
+An issue with the plots shown above is that they are specific to each session. This limited the amount of information I could gain from them as I could not display data from neurological data across all sessions in one plot. This was because the number of trials for each session differed. To combat this issue, I calculated each trial's density of neurological activity. I then graphed the density of each trial on a plot with color representing the mouse's name(). The primary intention of this plot is to observe how neurological activity differs between mice. This plot's secondary intention is to observe neurological differences between different response types. This is because it is already clear from the earlier analysis that this difference exists.
+
+(Orange = Lederberg, Black = Hench, Red = Forssmann, Blue = Cori)
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# create a list of 18 data frames each containing average neuron activity and feedback for each session
+ave.neuro.activ.ls <- list()
+c <- 1
+for(i in 1:18){
+  feedback.v <- c()
+  ave.neuro.activ <- c()
+  spks <- session[[i]]$spks
+  feedback.type <- session[[i]]$feedback_type
+  for(j in 1:length(feedback.type)){
+    feedback.v <- append(feedback.v, feedback.type[j])
+    matrix <- spks[[j]]
+    ave.neuro.activ <- append(ave.neuro.activ, sum(colSums(matrix))/(40*nrow(matrix)))
+  }
+  ave.neuro.activ.ls[[c]] <- data.frame(ave.neuro.activ, feedback.v)
+  c <- c + 1 
+  
+}
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# create list of incorrect and correct feedbacks in the data for each session
+c <- 1
+correct.ave.neuro.activ.ls <- list()
+incorrect.ave.neuro.activ.ls <- list()
+for(i in 1:length(ave.neuro.activ.ls)){
+  incorrect.ave.neuro.activ.ls[[c]] <-  ave.neuro.activ.ls[[i]] %>% filter(feedback.v == -1)
+  correct.ave.neuro.activ.ls[[c]] <-  ave.neuro.activ.ls[[i]] %>% filter(feedback.v == 1)
+  c <- c + 1
+}
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# create list of density curves the three lists of data each session
+densitly.curve.ls <- list()
+incorrect.densitly.curve.ls <- list()
+correct.densitly.curve.ls <- list()
+
+c = 1
+for(i in 1:18){
+  # Compute the density estimate
+  density_est <- density(ave.neuro.activ.ls[[i]][,1])
+  incorrect.density_est <- density(incorrect.ave.neuro.activ.ls[[i]][,1])
+  correct.density_est <- density(correct.ave.neuro.activ.ls[[i]][,1])
+  densitly.curve.ls[[c]] <- density_est
+  incorrect.densitly.curve.ls[[c]] <- incorrect.density_est
+  correct.densitly.curve.ls[[c]] <- correct.density_est
+  c = c + 1
+  # Plot the density curve
+  #plot(density_est, main = "Density Curve")
+}
+```
+
+```{r, echo = FALSE, warning = FALSE, message=FALSE}
+complete.plot <- ggplot()
+
+# Iterate over the density estimates and add density layers to the plot
+for (i in 1:length(densitly.curve.ls)) {
+  density_data <- data.frame(x = densitly.curve.ls[[i]]$x,
+                             y = densitly.curve.ls[[i]]$y,
+                             group = as.factor(i))
+  
+  complete.plot <- complete.plot +
+    geom_line(data = density_data,
+              aes(x = x, y = y, color = group))
+}
+
+# Define color palette
+color_palette <- c(rep("blue", 3), rep("red", 4), rep("black", 4), rep("orange", 7))
+
+# Define labels for each color group
+group_labels <- c("Session 1", "Session 2", "Session 3", "Session 4", "Session 5", "Session6", "Session 7", "Session 8", "Session 9", "Session 10", "Session 11", "Session 12", "Session 13", "Session 14", "Session 15", "Session 16", "Session 17", "Session 18")
+
+# Update plot to use custom color palette and labels
+complete.plot <- complete.plot + 
+  scale_color_manual(values = color_palette, labels = group_labels) +
+  labs(x = "probability", y = "neuroglogical activity", title = "Density of All Trials")
+
+
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+
+incorrect.plot <- ggplot()
+
+# Iterate over the density estimates and add density layers to the plot
+for (i in 1:length(incorrect.densitly.curve.ls)) {
+  density_data <- data.frame(x = incorrect.densitly.curve.ls[[i]]$x,
+                             y = incorrect.densitly.curve.ls[[i]]$y,
+                             group = as.factor(i))
+  
+  incorrect.plot <- incorrect.plot +
+    geom_line(data = density_data,
+              aes(x = x, y = y, color = group))
+}
+
+# Define labels for each color group
+group_labels <- c("Session 1", "Session 2", "Session 3", "Session 4", "Session 5", "Session6", "Session 7", "Session 8", "Session 9", "Session 10", "Session 11", "Session 12", "Session 13", "Session 14", "Session 15", "Session 16", "Session 17", "Session 18")
+
+# Customize color palette
+color_palette <- c(rep("blue", 3), rep("red", 4), rep("black", 4), rep("orange", 7))
+
+# Update plot to use custom color palette
+incorrect.plot <- incorrect.plot + 
+  scale_color_manual(values = color_palette) + 
+  labs(x = "probability", y = "neuroglogical Activity", title = paste("Density of inccorrect Trials")) +
+  theme(legend.position="none")
+
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+
+correct.plot <- ggplot()
+
+# Iterate over the density estimates and add density layers to the plot
+for (i in 1:length(correct.densitly.curve.ls)) {
+  density_data <- data.frame(x = correct.densitly.curve.ls[[i]]$x,
+                             y = correct.densitly.curve.ls[[i]]$y,
+                             group = as.factor(i))
+  
+  correct.plot <- correct.plot +
+    geom_line(data = density_data,
+              aes(x = x, y = y, color = group))
+}
+
+# Define labels for each color group
+group_labels <- c("Session 1", "Session 2", "Session 3", "Session 4", "Session 5", "Session6", "Session 7", "Session 8", "Session 9", "Session 10", "Session 11", "Session 12", "Session 13", "Session 14", "Session 15", "Session 16", "Session 17", "Session 18")
+
+# Customize color palette
+color_palette <- c(rep("blue", 3), rep("red", 4), rep("black", 4), rep("orange", 7))
+
+# Update plot to use custom color palette
+correct.plot <- correct.plot + scale_color_manual(values = color_palette) + labs(x = "probability", y = "neuroglogical activity", title = paste("Density of correct Trials")) +   theme(legend.position="none")
+
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+grid.arrange(complete.plot + theme(legend.position="none"), incorrect.plot, correct.plot)
+```
+
+The plot above is fairly clumped, but some things are clear. For instance, the Hench and Forsmann's density curves are fairly tightly clustered together. The Cori and lederberg's are far more spread out. This goes to show that the neurologic activity is very different between mice. It is essential to account for this when creating a model.
+
+Additionally, when you disregard the mouse in each session, the shapes of the curves differ between each plot. Most curves in the three plots differ, concurrent with what was observed in previous plots. However, there is no visible unilateral trend of all curves being higher, more clumped or spread out. This is because the density plots are designed to show differences between mice, not differences between activity in each session.
+
+# Part 2
+
+## i - Oversampling Justification
+
+As I found significant differences between the different mouse's neurological activity in the density plot, I further analyzed how data differs between sessions. This analysis aims to determine if the difference between mouse data was large enough to warrant separate models for each mouse in the test data. To Continue on this track, I compared the success rates across mice. I have chosen to analyze success rates because they directly relate to a mouse's decision-making skills, which are caused by their neurological activity. Therefore, different success rates are indicative of different neurological activities.
+### Success Rates per Mouse
+The table below shows the average success rate(SuccessRate), the Number of Sessions(NumberOfSessions), and the Total number of trials(TotalTrials) for each of the four mice. There is a clear difference between the accuracy of Cori and Lederberg, over 10 percent, and almost no difference in the accuracy of Forssmann and Hench. The large spread in success rate supports the need for separate models as significant differences in the decision-making skills of the mice cause this gap. 
+
+Furthermore, the number of sessions and trials differs significantly between mice. This could present an issue because a singular model designed to predict Cori or Lederberg's actions in sessions 1 and 18 could be heavily weighted toward the other mice as there is so much more data from other mice, specifically in the case of Cori. One way to combat this issue is to oversample the data from the mice in sessions 1 and 18.
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+Name <- c("Cori", "Forssmann", "Hench", "Lederberg")
+SuccessRate <- c(63.3, 68.5, 68.8, 76.4)
+NumberOfSessions <- c(3, 4, 4, 7)
+TotalTrials <- c(593, 1045, 1411, 2032)
+df <- data.frame(Name, NumberOfSessions, TotalTrials, SuccessRate)
+
+kable(df, format = "html", table.attr = "class='table table-striped'",digits=2) 
+
+```
+
+I graphed each mouse's success over time to further visualize the differences between mice in the trials.
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# create a graph of the responces of mice over time
+# goal is to see if there is a corrilation between trial in session and success rate
+# create a function to count a running sum of the trial feedback
+new.runningsum = function(x){
+  a = 0
+  b = c()
+  for(i in 1:nrow(x)){
+    if(x[i,1] == 1){
+      a = a + x[i,1]
+      b = c(b,a)
+    }
+    else{
+      a = a + x[i,1] + 1
+      b = c(b,a)
+    }
+  }
+  trialnum = 1:nrow(x)
+  runsum = data.frame(b, trialnum)
+  return(runsum)
+  }
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# create a graph of the responces of mice over time
+# goal is to see if there is a corrilation between trial in session and success rate
+# create a function to count a running sum of the trial feedback
+runningsum = function(x){
+  a = 0
+  b = c()
+  for(i in 1:nrow(x)){
+      a = a + x[i,1]
+      b = c(b,a)
+    }
+  trialnum = 1:nrow(x)
+  runsum = data.frame(b, trialnum)
+  return(runsum)
+  }
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# not penalized for incorrect 
+names <- c("Cori", "Forssmann", "Hench", "Lederberg") 
+Cori <- ggplot() + ggtitle("Cori Success Rate") + xlab("trials") + ylab("successes")
+Forssmann <- ggplot() + ggtitle("Forssmann Success Rate") + xlab("trials") + ylab("successes")
+Hench <- ggplot() + ggtitle("Hench Success Rate") + xlab("trials") + ylab("successes")
+Lederberg <- ggplot() + ggtitle("Lederberg Success Rate") + xlab("trials") + ylab("successes")
+
+
+# Define a color palette with a sufficient number of colors
+color_palette <- rainbow(18)  # Using the Set1 palette
+
+# ... (rest of your code)
+
+for (i in 1:18) {
+  sess <- session[[i]]
+  for (name in names) {
+    if (sess$mouse_name == "Cori") {
+      runsum <- sess["feedback_type"] %>% as.data.frame() %>% new.runningsum()
+      Cori <- Cori +
+        geom_point(data = runsum, aes(x = trialnum, y = b), color = color_palette[i])
+    }
+    if (sess$mouse_name == "Forssmann") {
+      runsum <- sess["feedback_type"] %>% as.data.frame() %>% new.runningsum()
+      Forssmann <- Forssmann +
+        geom_point(data = runsum, aes(x = trialnum, y = b), color = color_palette[i])
+    }
+    if (sess$mouse_name == "Hench") {
+      runsum <- sess["feedback_type"] %>% as.data.frame() %>% new.runningsum()
+      Hench <- Hench +
+        geom_point(data = runsum, aes(x = trialnum, y = b), color = color_palette[i])
+    }
+    if (sess$mouse_name == "Lederberg") {
+      runsum <- sess["feedback_type"] %>% as.data.frame() %>% new.runningsum()
+      Lederberg <- Lederberg +
+        geom_point(data = runsum, aes(x = trialnum, y = b), color = color_palette[i])
+    }
+  }
+}
+
+# ... (rest of your code)
+
+grid.arrange(Cori, Forssmann, Hench, Lederberg)
+```
+
+These plots are challenging to interpret in this form as they are so similar, although you can see that Hench's success rate varies the most and that Lederberg's success rates vary the least. It is also clear that Cori's success rates are the least linear.
+
+I created the plots below to make the different trends in the mice's success rates more apparent. The only difference is incorrect decisions are penalized. I.e., correct values correlate to a plus one, and an incorrect value correlates to a negative one. These values are added to a running sum which is graphed. This graph does not show the true success rate as the graph above, but it does show the differences in between the mice far more clearly
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# penalized for incorrect
+names <- c("Cori", "Forssmann", "Hench", "Lederberg") 
+Cori <- ggplot() + ggtitle("Cori Success Rate") + xlab("trials") + ylab("successes")
+Forssmann <- ggplot() + ggtitle("Forssmann Success Rate") + xlab("trials") + ylab("successes")
+Hench <- ggplot() + ggtitle("Hench Success Rate") + xlab("trials") + ylab("successes")
+Lederberg <- ggplot() + ggtitle("Lederberg Success Rate") + xlab("trials") + ylab("successes")
+
+
+# Define a color palette with a sufficient number of colors
+color_palette <- rainbow(18)  # Using the Set1 palette
+
+# ... (rest of your code)
+
+for (i in 1:18) {
+  sess <- session[[i]]
+  for (name in names) {
+    if (sess$mouse_name == "Cori") {
+      runsum <- sess["feedback_type"] %>% as.data.frame() %>% runningsum()
+      Cori <- Cori +
+        geom_point(data = runsum, aes(x = trialnum, y = b), color = color_palette[i])
+    }
+    if (sess$mouse_name == "Forssmann") {
+      runsum <- sess["feedback_type"] %>% as.data.frame() %>% runningsum()
+      Forssmann <- Forssmann +
+        geom_point(data = runsum, aes(x = trialnum, y = b), color = color_palette[i])
+    }
+    if (sess$mouse_name == "Hench") {
+      runsum <- sess["feedback_type"] %>% as.data.frame() %>% runningsum()
+      Hench <- Hench +
+        geom_point(data = runsum, aes(x = trialnum, y = b), color = color_palette[i])
+    }
+    if (sess$mouse_name == "Lederberg") {
+      runsum <- sess["feedback_type"] %>% as.data.frame() %>% runningsum()
+      Lederberg <- Lederberg +
+        geom_point(data = runsum, aes(x = trialnum, y = b), color = color_palette[i])
+    }
+  }
+}
+
+# ... (rest of your code)
+
+grid.arrange(Cori, Forssmann, Hench, Lederberg)
+```
+
+These plots show the same trend as in the previous plots, only far more clearly. It is clear, as before, that Lederberg has the highest success rate. Hench's success rate varies the most, and Forssmann's varies the second most in the second most. Cori's success rate is far different from the rest of the mice, fluctuating far more throughout the sessions. This plot clearly shows that the success rates of different mice are very different. Additionally, each mouse has a specific pattern in there success rate, such as Cori's inconsistent success rate or Ledenbreg's very consistent success rate. In conclusion, Because this project aims to create a model specifically for data from Cori's and Ledenberg's sessions, and each mouse's data is so different, it is essential to oversample Cori and Lendenberg's data to train two different models.
+
+## ii - Contrast type
+
+To understand the motivation for analyzing contrast, knowing more about the stimuli the mice receive is essential. The mice are shown a screen with two images. Each image has a contrast level of 0, .25, .5, and 1, each representing a level of detail, 0 being non and 1 being the most. If the level of detail is 0 for both images, then the mice should do nothing. If the level of detail for each image is the same, the mice have a 50-50 percent chance of getting the choice right, as the correct decision is assigned randomly. In all other cases, the mice should twist the ball in the direction of the image with more detail.
+
+In the interest of finding more significant variables to use as coefficients for modeling, I created the bar plots below, showing the success rates of the mice and the contrast types. The motivation for this is that it would make sense for the mice to have a higher success rate when the difference, in contrast, is higher and for their success rate to be roughly 50 percent when the contrast is 0/0. The contrast levels are displayed on the x-axis of the bar plots in the format of left-image-contrast-level/right-image-contrast-level.
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+feedback <- c()
+conValL <- c()
+conValR <- c()
+for (i in 1:18){
+  feedback <- append(feedback, session[[i]][["feedback_type"]])
+  conValL <- append(conValL, session[[i]][["contrast_left"]])
+  conValR <- append(conValR, session[[i]][["contrast_right"]])
+}
+
+type <- c()
+for (i in 1:length(feedback)){
+  type <- append(type, paste0("", conValL[i], "/", conValR[i]))
+}
+
+contrastVal <- data.frame(feedback,type)
+
+contrast.val.table <- table(contrastVal)
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+decision.type <-c()
+for(i in 1:5081){
+  if(conValL[i] - conValR[i] == 0 & conValL[i] + conValR[i] != 0){
+    decision.type <- append(decision.type, 1)
+  }
+  else if(conValL[i] + conValR[i] == 0){
+    decision.type <- append(decision.type, 2)
+  }
+  else{
+    decision.type <- append(decision.type, 3)
+  }
+    
+}
+
+```
+
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+totals <- colSums(contrast.val.table)
+percentSuccess <- contrast.val.table[2,]/totals
+contrast.df <- rbind(contrast.val.table, percentSuccess, totals)
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+
+contrast.df <- data.frame(x=c(sort(unique(type))), y=c(as.numeric(percentSuccess)))
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+p <- ggplot(contrast.df, aes(x = x, y = y)) +
+  geom_bar(stat = 'identity', fill = 'steelblue') +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  labs(title = 'Bar Plot of Percentages by Title', x = 'Titles', y = 'Percentage')
+p
+```
+
+Although this plot is confusing at first glance, some essential information is in it. Whenever the detail levels are the same and not 0, the mice are roughly 50 percent accurate, significantly less than in all other cases. This follows the randomly assigned correct direction. Additionally, when the contrast level is very high, I.e., 0/1 or .25/1, the success rate is far higher than in other contrast levels. This intuitively makes sense if the difference is greater; it would be easier for the mice to see and make the right decision. It is also clear that when the mice are not making a decision in the case of 0/0 it, they have roughly the same success rate as when the contrast levels are similar. However, because the mice are deciding not to do anything rather than do something, this must be accounted for in my model.
+
+
+
+# Part 3
+
+## i -Model coefficient Selection
+The method I chose to build my model was logistic regression. I chose this model because I am computing a binary outcome, success or failure. The coefficients for my model are 
+ - 1) Average neurological activity, as there was a significant relationship between it and success and failure found in part 1. 
+ - 2) Right and left contrast to account for the effect differing contrast levels had on accuracy(higher difference in left and right contrast correlated with higher accuracy)
+ - 3) To account for decision type, I created 3 clusters, one representing equal and non-zero contrasts correlating with a roughly 50-50 random chance success rate, 0/0 contrast representing the decision to do nothing, and nonequal contrast types representing a decision with a non 50-50 success rate.
+ 
+## ii -Weighted Sampling and Logistic Regression
+
+As I found evidence showing the neurological activity and success rates are significantly different between mice in part iv of part 1 and part 2, I decided to over-sample with replacement the training data two build a model specifically designed to be successful on the test data in session 1 and 18, respectively. To do this, I created different sets of training data,  oversampling either the data from Cori and Lederberg's sessions. The method I used to oversample was to make a training data set of all the data and then resample all the data from the mouse i was weighing the training data for. I did this 4 times in the case of cori(Session 1) and twice in the case of Ledenberg(Session 18). I varied the amount of over-sampling because there were far fewer trials from Cori than from Lederberg(refer to the data table in part 2). To test if my over-sampling method had a positive effect, I created a model with no over-sampled data to compare it to my two specific models.
+
+
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# unweighted data
+left.right.feed <- list()
+contrast.type <- list()
+
+for (i.s in 1:18) { 
+  contrast.left <- session[[i.s]]$contrast_left
+  contrast.right <- session[[i.s]]$contrast_right
+  #ave.spks <- new.ave.neuro.activ.ls[[i.s]][,1]
+  feedback.type <- (session[[i.s]][["feedback_type"]] == 1) 
+  ave.activity <- ave.activity.ls[[i.s]][,1]
+  conR <- session[[i.s]]$contrast_right
+  conL <- session[[i.s]]$contrast_left
+  decision.type <- c()
+  for(i in 1:length(conL)){
+    if(conL[i] - conR[i] == 0 & conL[i] + conR[i] != 0){
+      decision.type <- append(decision.type, 1)
+      }
+    else if(conL[i] + conR[i] == 0){
+      decision.type <- append(decision.type, 2)
+      }
+    else{
+      decision.type <- append(decision.type, 3)
+      }
+    }
+
+  contrast.df <- data.frame(contrast.left, contrast.right, feedback.type, ave.activity, decision.type)
+  left.right.feed[[i.s]] <- contrast.df
+
+}
+
+merged_df <- do.call(rbind, left.right.feed)
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# unweighted for session 1 data
+kk <- 1
+left.right.feed <- list()
+contrast.type <- list()
+
+for (i.s in 1:18) {
+  contrast.left <- session[[i.s]]$contrast_left
+  contrast.right <- session[[i.s]]$contrast_right
+  feedback.type <- (session[[i.s]][["feedback_type"]] == 1) 
+  ave.activity <- ave.activity.ls[[i.s]][,1]
+  conR <- session[[i.s]]$contrast_right
+  conL <- session[[i.s]]$contrast_left
+  decision.type <- c()
+  for(i in 1:length(conL)){
+    if(conL[i] - conR[i] == 0 & conL[i] + conR[i] != 0){
+      decision.type <- append(decision.type, 1)
+      }
+    else if(conL[i] + conR[i] == 0){
+      decision.type <- append(decision.type, 2)
+      }
+    else{
+      decision.type <- append(decision.type, 3)
+      }
+    }
+
+  contrast.df <- data.frame(contrast.left, contrast.right, feedback.type, ave.activity, decision.type)
+  left.right.feed[[kk]] <- contrast.df
+  kk <- kk + 1
+}
+kk <- 19
+for(i.s in c(1,1,1,1,1,2,2,2,2,2,3,3,3,3,3)){
+  contrast.left <- session[[i.s]]$contrast_left
+  contrast.right <- session[[i.s]]$contrast_right
+  feedback.type <- (session[[i.s]][["feedback_type"]] == 1) 
+  ave.activity <- ave.activity.ls[[i.s]][,1]
+  conR <- session[[i.s]]$contrast_right
+  conL <- session[[i.s]]$contrast_left
+  decision.type <- c()
+  for(i in 1:length(conL)){
+    if(conL[i] - conR[i] == 0 & conL[i] + conR[i] != 0){
+      decision.type <- append(decision.type, 1)
+      }
+    else if(conL[i] + conR[i] == 0){
+      decision.type <- append(decision.type, 2)
+      }
+    else{
+      decision.type <- append(decision.type, 3)
+      }
+    }
+
+  contrast.df <- data.frame(contrast.left, contrast.right, feedback.type, ave.activity, decision.type)
+  left.right.feed[[kk]] <- contrast.df
+  kk <- kk + 1
+}
+
+session1WeightedData_df <- do.call(rbind, left.right.feed)
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# unweighted for session 2 data
+kk <- 1
+left.right.feed <- list()
+contrast.type <- list()
+
+for (i.s in 1:18) {
+  contrast.left <- session[[i.s]]$contrast_left
+  contrast.right <- session[[i.s]]$contrast_right
+  feedback.type <- (session[[i.s]][["feedback_type"]] == 1)
+  ave.activity <- ave.activity.ls[[i.s]][,1]
+  conR <- session[[i.s]]$contrast_right
+  conL <- session[[i.s]]$contrast_left
+  decision.type <- c()
+  for(i in 1:length(conL)){
+    if(conL[i] - conR[i] == 0 & conL[i] + conR[i] != 0){
+      decision.type <- append(decision.type, 1)
+      }
+    else if(conL[i] + conR[i] == 0){
+      decision.type <- append(decision.type, 2)
+      }
+    else{
+      decision.type <- append(decision.type, 3)
+      }
+    }
+
+  contrast.df <- data.frame(contrast.left, contrast.right, feedback.type, ave.activity, decision.type)
+  left.right.feed[[kk]] <- contrast.df
+  kk <- kk + 1
+}
+
+kk <- 19
+for(i.s in c(12,12,12,13,13,13,14,14,14,15,15,15,16,16,16,17,17,17,18,18,18)){
+  contrast.left <- session[[i.s]]$contrast_left
+  contrast.right <- session[[i.s]]$contrast_right
+  feedback.type <- (session[[i.s]][["feedback_type"]] == 1) 
+  ave.activity <- ave.activity.ls[[i.s]][,1]
+  conR <- session[[i.s]]$contrast_right
+  conL <- session[[i.s]]$contrast_left
+  decision.type <- c()
+  for(i in 1:length(conL)){
+    if(conL[i] - conR[i] == 0 & conL[i] + conR[i] != 0){
+      decision.type <- append(decision.type, 1)
+      }
+    else if(conL[i] + conR[i] == 0){
+      decision.type <- append(decision.type, 2)
+      }
+    else{
+      decision.type <- append(decision.type, 3)
+      }
+    }
+
+  contrast.df <- data.frame(contrast.left, contrast.right, feedback.type, ave.activity, decision.type)
+  left.right.feed[[kk]] <- contrast.df
+  kk <- kk + 1
+}
+
+session18WeightedData_df <- do.call(rbind, left.right.feed)
+
+```
+
+## iii - Models
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+unwieghted.lg <- glm(feedback.type ~  contrast.left + contrast.right + ave.activity + decision.type, data = merged_df,family="binomial")
+
+# create logistic regression for data weighted for session 1
+session1nwieghted.lg <- glm(feedback.type ~  contrast.left + contrast.right + ave.activity + decision.type, data = session1WeightedData_df ,family="binomial")
+
+# create logistic regression for data weighted for session 18
+session18wieghted.lg <- glm(feedback.type ~   contrast.left + contrast.right + ave.activity + decision.type, data = session18WeightedData_df,family="binomial")
+```
+
+Below are summaries of the three models.
+
+Unweighted model
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+summary(unwieghted.lg)
+```
+
+Session 1 Weighted Model
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+summary(session1nwieghted.lg)
+```
+
+Session 18 Weighted Model.
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+summary(session18wieghted.lg)
+```
+From the three summaries, it is clear that the coefficient left contrast is not significant enough to be included as a coefficient. For this reason, I removed it from all of my models.
+
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# test2 data
+
+  contrast.left <- test2$contrast_left
+  contrast.right <- test2$contrast_right
+  feedback.type <- (test2[["feedback_type"]] == 1) 
+  spks <- test2$spks
+  ave.activity.v <- c()
+  for(j in 1:length(spks)){
+    matrix <- spks[[j]]
+    ave.activity <- sum(rowSums(matrix)/40)/nrow(matrix)
+    ave.activity.v <- append(ave.activity.v, ave.activity)
+  }
+  ave.activity <- ave.activity.v
+  conR <- test2$contrast_right
+  conL <- test2$contrast_left
+  decision.type <- c()
+  for(i in 1:length(conL)){
+    if(conL[i] - conR[i] == 0 & conL[i] + conR[i] != 0){
+      decision.type <- append(decision.type, 1)
+      }
+    else if(conL[i] + conR[i] == 0){
+      decision.type <- append(decision.type, 2)
+      }
+    else{
+      decision.type <- append(decision.type, 3)
+      }
+    }
+
+  test2.df <- data.frame(contrast.left, contrast.right, feedback.type, ave.activity, decision.type)
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# test1 data
+
+  contrast.left <- test1$contrast_left
+  contrast.right <- test1$contrast_right
+  feedback.type <- (test1[["feedback_type"]] == 1) 
+  spks <- test1$spks
+  ave.activity.v <- c()
+  for(j in 1:length(spks)){
+    matrix <- spks[[j]]
+    ave.activity <- sum(rowSums(matrix)/40)/nrow(matrix)
+    ave.activity.v <- append(ave.activity.v, ave.activity)
+  }
+  ave.activity <- ave.activity.v
+  conR <- test1$contrast_right
+  conL <- test1$contrast_left
+  decision.type <- c()
+  for(i in 1:length(conL)){
+    if(conL[i] - conR[i] == 0 & conL[i] + conR[i] != 0){
+      decision.type <- append(decision.type, 1)
+      }
+    else if(conL[i] + conR[i] == 0){
+      decision.type <- append(decision.type, 2)
+      }
+    else{
+      decision.type <- append(decision.type, 3)
+      }
+    }
+
+  test1.df <- data.frame(contrast.left, contrast.right, feedback.type, ave.activity, decision.type)
+complete.test.df <- rbind(test2.df, test1.df)
+
+```
+
+
+
+## iv - Testing data
+I broke the data into three different testing cases. One of all the data(complete test), two of just the data from session one(session 1 test) and three all of the data from session 18(session 18 Test).
+
+Below are three tables showing four variables. The first is model testing data. The second is the proportion of correctly predicted positives out of all predicted positives(Precision). The third is the proportion of correctly predicted positives out of all positives(Recall). The fourth is f1, which combines precision and recall to create one statistic that provides a balanced measure of the preformance of both False positives and False negatives. Each table consists of all three models being tested on either the complete session 1 or session 18 testing data set.
+
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# Splitting the dataset into the Training set and Test set
+# install.packages('caTools')
+library(caTools)
+set.seed(123)
+split = sample.split(merged_df, SplitRatio = 0.75)
+training_set = merged_df
+test_set = complete.test.df
+
+# Feature Scaling
+training_set[-3] = scale(training_set[-3])
+test_set[-3] = scale(test_set[-3])
+
+# Fitting Logistic Regression to the Training set
+classifier = unwieghted.lg
+
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-3])
+y_pred = ifelse(prob_pred > 0.5, 1, 0)
+
+
+# Making the Confusion Matrix
+cm = table(test_set[, 3], y_pred > 0.5)
+
+Precision <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(y_pred == 1)
+
+
+Recall <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(test_set[, 3] == 1)
+
+
+f1 <- 2 * Precision * Recall / (Precision + Recall)
+Model <- "Unweighted Model Complete Test"
+U1 <- data.frame(Model, Precision, Recall, f1)
+
+```
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# Splitting the dataset into the Training set and Test set
+# install.packages('caTools')
+library(caTools)
+set.seed(123)
+split = sample.split(merged_df, SplitRatio = 0.75)
+training_set = merged_df
+test_set = test1.df
+
+# Feature Scaling
+training_set[-3] = scale(training_set[-3])
+test_set[-3] = scale(test_set[-3])
+
+# Fitting Logistic Regression to the Training set
+classifier = unwieghted.lg
+
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-3])
+y_pred = ifelse(prob_pred > 0.5, 1, 0)
+
+
+# Making the Confusion Matrix
+cm = table(test_set[, 3], y_pred > 0.5)
+
+Precision <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(y_pred == 1)
+
+
+Recall <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(test_set[, 3] == 1)
+
+
+f1 <- 2 * Precision * Recall / (Precision + Recall)
+Model <- "Unweighted Model Session 1 test"
+U2 <- data.frame(Model, Precision, Recall, f1)
+
+```
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+# Splitting the dataset into the Training set and Test set
+# install.packages('caTools')
+library(caTools)
+set.seed(123)
+split = sample.split(merged_df, SplitRatio = 0.75)
+training_set = merged_df
+test_set = test2.df
+
+# Feature Scaling
+training_set[-3] = scale(training_set[-3])
+test_set[-3] = scale(test_set[-3])
+
+# Fitting Logistic Regression to the Training set
+classifier = unwieghted.lg
+
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-3])
+y_pred = ifelse(prob_pred > 0.5, 1, 0)
+
+
+# Making the Confusion Matrix
+cm = table(test_set[, 3], y_pred > 0.5)
+
+Precision <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(y_pred == 1)
+
+
+Recall <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(test_set[, 3] == 1)
+
+
+f1 <- 2 * Precision * Recall / (Precision + Recall)
+Model <- "Unweighted Model Sesssion 18 Test"
+U3 <- data.frame(Model, Precision, Recall, f1)
+
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+
+# Splitting the dataset into the Training set and Test set
+# install.packages('caTools')
+library(caTools)
+set.seed(123)
+training_set = session1WeightedData_df
+test_set = complete.test.df
+
+# Feature Scaling
+training_set[-3] = scale(training_set[-3])
+test_set[-3] = scale(test_set[-3])
+
+# Fitting Logistic Regression to the Training set
+classifier = session1nwieghted.lg
+
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-3])
+y_pred = ifelse(prob_pred > 0.5, 1, 0)
+
+
+# Making the Confusion Matrix
+cm = table(test_set[, 3], y_pred > 0.5)
+
+
+Precision <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(y_pred == 1)
+
+
+Recall <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(test_set[, 3] == 1)
+
+
+f1 <- 2 * Precision * Recall / (Precision + Recall)
+Model <- "Session 1 Weighted Model, Complete Test"
+B1 <- data.frame(Model, Precision, Recall, f1)
+```
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+
+# Splitting the dataset into the Training set and Test set
+# install.packages('caTools')
+library(caTools)
+set.seed(123)
+training_set = session1WeightedData_df
+test_set = test1.df
+
+# Feature Scaling
+training_set[-3] = scale(training_set[-3])
+test_set[-3] = scale(test_set[-3])
+
+# Fitting Logistic Regression to the Training set
+classifier = session1nwieghted.lg
+
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-3])
+y_pred = ifelse(prob_pred > 0.5, 1, 0)
+
+
+# Making the Confusion Matrix
+cm = table(test_set[, 3], y_pred > 0.5)
+
+
+Precision <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(y_pred == 1)
+
+
+Recall <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(test_set[, 3] == 1)
+
+
+f1 <- 2 * Precision * Recall / (Precision + Recall)
+Model <- "Session 1 Weighted Model, Session 1 Test"
+B2 <- data.frame(Model, Precision, Recall, f1)
+```
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+
+# Splitting the dataset into the Training set and Test set
+# install.packages('caTools')
+library(caTools)
+set.seed(123)
+training_set = session1WeightedData_df
+test_set = test2.df
+
+# Feature Scaling
+training_set[-3] = scale(training_set[-3])
+test_set[-3] = scale(test_set[-3])
+
+# Fitting Logistic Regression to the Training set
+classifier = session1nwieghted.lg
+
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-3])
+y_pred = ifelse(prob_pred > 0.5, 1, 0)
+
+
+# Making the Confusion Matrix
+cm = table(test_set[, 3], y_pred > 0.5)
+
+
+Precision <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(y_pred == 1)
+
+
+Recall <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(test_set[, 3] == 1)
+
+
+f1 <- 2 * Precision * Recall / (Precision + Recall)
+Model <- "Session 1 Weighted Model, Session 18 Test"
+B3 <- data.frame(Model, Precision, Recall, f1)
+```
+
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+
+# Splitting the dataset into the Training set and Test set
+# install.packages('caTools')
+library(caTools)
+set.seed(123)
+training_set = session18WeightedData_df
+test_set = complete.test.df
+
+# Feature Scaling
+training_set[-3] = scale(training_set[-3])
+test_set[-3] = scale(test_set[-3])
+
+# Fitting Logistic Regression to the Training set
+classifier = session18wieghted.lg
+
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-3])
+y_pred = ifelse(prob_pred > 0.5, 1, 0)
+
+
+# Making the Confusion Matrix
+cm = table(test_set[, 3], y_pred > 0.5)
+
+
+Precision <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(y_pred == 1)
+
+
+Recall <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(test_set[, 3] == 1)
+
+
+f1 <- 2 * Precision * Recall / (Precision + Recall)
+Model <- "Session 18 Weighted Model, Complete Test"
+A1 <- data.frame(Model, Precision, Recall, f1)
+
+```
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+
+# Splitting the dataset into the Training set and Test set
+# install.packages('caTools')
+library(caTools)
+set.seed(123)
+training_set = session18WeightedData_df
+test_set = test1.df
+
+# Feature Scaling
+training_set[-3] = scale(training_set[-3])
+test_set[-3] = scale(test_set[-3])
+
+# Fitting Logistic Regression to the Training set
+classifier = session18wieghted.lg
+
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-3])
+y_pred = ifelse(prob_pred > 0.5, 1, 0)
+
+
+# Making the Confusion Matrix
+cm = table(test_set[, 3], y_pred > 0.5)
+
+
+Precision <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(y_pred == 1)
+
+
+Recall <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(test_set[, 3] == 1)
+
+
+f1 <- 2 * Precision * Recall / (Precision + Recall)
+Model <- "Session 18 Weighted Model, Session 1 Test"
+A2 <- data.frame(Model, Precision, Recall, f1)
+
+```
+```{r,  echo = FALSE, warning=FALSE, message=FALSE}
+
+# Splitting the dataset into the Training set and Test set
+# install.packages('caTools')
+library(caTools)
+set.seed(123)
+training_set = session18WeightedData_df
+test_set = test2.df
+
+# Feature Scaling
+training_set[-3] = scale(training_set[-3])
+test_set[-3] = scale(test_set[-3])
+
+# Fitting Logistic Regression to the Training set
+classifier = session18wieghted.lg
+
+
+# Predicting the Test set results
+prob_pred = predict(classifier, type = 'response', newdata = test_set[-3])
+y_pred = ifelse(prob_pred > 0.5, 1, 0)
+
+
+# Making the Confusion Matrix
+cm = table(test_set[, 3], y_pred > 0.5)
+
+
+Precision <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(y_pred == 1)
+
+
+Recall <- sum(y_pred == 1 & test_set[, 3] == 1) / sum(test_set[, 3] == 1)
+
+
+f1 <- 2 * Precision * Recall / (Precision + Recall)
+Model <- "Session 18 Weighted Model, Session 18 Test"
+A3 <- data.frame(Model, Precision, Recall, f1)
+
+```
+
+
+
+```{r, echo = FALSE, warning=FALSE, message=FALSE}
+complete.test.df <- rbind(U1, B1, A1)
+session1.test.df <- rbind(U2, B2, A2)
+session18.test.df <- rbind(U3, B3, A3)
+final.df <- rbind(complete.test.df, session1.test.df, session18.test.df)
+kable(complete.test.df, format = "html", table.attr = "class='table table-striped'",digits=5) 
+kable(session1.test.df, format = "html", table.attr = "class='table table-striped'",digits=5) 
+kable(session18.test.df, format = "html", table.attr = "class='table table-striped'",digits=5) 
+
+```
+
+# v - Model Analysis and Conclusion
+
+When you compare the precision, recall, and F1 values across each model's testing data sets in the tables above it is clear the values are very similar. This goes to show that my over-sampling with replacement technique was ineffective. This means that the success fullness of my models was largely determined by the coefficients I set. In the future, when building a model, I will not rel-lie as heavily on oversampling data to improve the model. Instead, I would find more significant relationships within the data to use as coefficients or a different bootstrapped sampling method.
+
+It is important to note even though my oversampling approach did not work; there were significant differences between mice in the trials. For this reason, other bootstrapped approaches similar to mine would be a good thing to explore in further research. One such method I would conduct is sampling with replacement.
+
+From the findings in this project, I can conclude higher neurological in mice is correlates with successful decision-making. It is likely that this is true for other animals as well. Furthermore, oversampling with the replacement method I used is ineffective in this case and is like to be ineffective in other similar cases.
+
+
+
+## Acknolodgments
+
+I used Chat GPT for rough outlines of code, However I copied and pasted nothing, everything was typed out by me. I worked on this project in a study group with Alec Lin, Shatoshi Shinkawa, and Victor Lu. I wrote all the code myself however we shared many ideas.
+
+## Appendix {-}
+
+\begin{center} Appendix: R Script \end{center}
+
+```{r, ref.label=knitr::all_labels(),echo=TRUE,eval=FALSE}
+```
